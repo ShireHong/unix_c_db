@@ -2,6 +2,7 @@
 #include<stdio.h>
 #include"lock_reg.h"
 #include<string.h>
+#include<sys/uio.h>
 
 #define writew_lock(fd, offset, whence, len) lock_reg(fd,F_SETLKW,F_WRLCK,of    fset,whence,len)
 #define un_lock(fd,offset,whence,len)    lock_reg(fd,F_SETLK,F_UNLCK,offset,    whence,len)
@@ -158,7 +159,7 @@ _db_hash(DB *db,const char *key)
 
 
 off_t  
-_db_readptr(DB* db, off_t offset)
+_db_readptr(DB* db, off_t offset)//偏移？
 {
 	char  asciiptr[PTR_SZ + 1];
 	lseek(db->idxfd,offset,SEEK_SET);
@@ -167,6 +168,47 @@ _db_readptr(DB* db, off_t offset)
 	asciiptr[PTR_SZ] = 0;
 	return(atol(asciiptr));
 }
+
+
+off_t 
+_db_readidx(DB *db,off_t offset)//读索引
+{
+	int 	i;
+	char 	*ptr1,*ptr2;
+	char 	asciiptr[PTR_ZE+1],asciilen[IDXLEN_SZ+1];
+	struct iovec iov[2];
+	if((db->idxoff = lseek(db->idxfd,offset,offset == 0 ? SEEK_CUR:SEEK_SET))==-1)
+			perror("lseek error");
+	iov[0].iov_base = asciiptr;
+	iov[0].iov_len  = PTR_SZ;
+	iov[1].iov_base = asciilen;
+	iov[1].iov_len  = IDXLEN_SZ;	
+	
+	if((i=readv(db-idxfd,iov,2)) != PTR_SZ + IDXLEN_SZ)//输入字符和字符长度
+	{
+		if(i==0 && offset == 0)
+			return -1;//eof
+	}
+	asciiptr[PTR_SZ]=0;
+	if((db->idxlen = atoi(asciilen))<IDXLEN_MIN||db->idxlen>IDXLEN_MAX)//将字符转换为整数
+		perror("invalid length");
+	read(db->idxfd,db->idxbuf,db->idxlen);
+	if(db->idxbuf[db->idxlen-1] != '\n')
+		perror("missing newline");
+	db->idxbuf[db->idxlen-1] = =0;
+	
+	ptr1=strchr(db->idxbuf,SEP);//ptr1指向第一次出现：的字符串
+	*ptr++=0;
+	
+	ptr2=strchr(ptr1,SEP);//ptr2指向第二次的：
+	*ptr2++=0;
+
+	
+
+}	
+
+
+
 
 
 
