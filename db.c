@@ -49,7 +49,7 @@ db_open(const char *name,int oflag,int mode)
 	db->nhash = NHASH_DEF;
 	db->hashoff = HASH_OFF;
 	db_rewind(db);
-	rreturn(db);
+	return(db);
 } 
 
 static DB*
@@ -152,7 +152,7 @@ _db_hash(DB *db,const char *key)
 	char c;
 	int i;
 	hval=0;
-	for(ptr=key,i=1;c=*ptr++;i++)//只要ptr加到末尾c=0,则中间的条件就不满足，                                   跳出循环，此方法巧妙	
+	for(ptr=key,i=1;c=*ptr++;i++)//只要ptr加到末尾c=0,则中间的条件就不满足,跳出循环，此方法巧妙	
 		hval +=c*i;
 	return(hval % db->nhash)
 }
@@ -189,7 +189,10 @@ _db_readidx(DB *db,off_t offset)//读索引
 		if(i==0 && offset == 0)
 			return -1;//eof
 	}
+
 	asciiptr[PTR_SZ]=0;
+	db->ptrval = atol(asciiptr);//偏移
+
 	if((db->idxlen = atoi(asciilen))<IDXLEN_MIN||db->idxlen>IDXLEN_MAX)//将字符转换为整数
 		perror("invalid length");
 	read(db->idxfd,db->idxbuf,db->idxlen);
@@ -202,10 +205,282 @@ _db_readidx(DB *db,off_t offset)//读索引
 	
 	ptr2=strchr(ptr1,SEP);//ptr2指向第二次的：
 	*ptr2++=0;
-
 	
+	if(strchr(ptr2,SEP)!=NULL)
+		perror("too many separators");
+	
+	if((db->datoff = atol(ptr1))<0)
+		perror("starting offset<0");
+	if((db->datlen = atol(ptr2))<0)
+		perror("invalid length");
+	
+	return(db->ptrval);
 
 }	
+
+char *
+_db_readdat(DB *db)
+{
+	if(lseek(db->datfd,db->datoff,SEEK_SET) == -1)
+		perror("lseek error");
+	if(read(db->datfd,db->datbuf,db->datlen) != db->datlen)
+		perror("read error");
+	if(db->datbuf[db->datlen - 1] !='\n')
+		perror("missing newline");
+	db->datbuf[db->datlen -1]=0;
+	return db->datbuf;
+}
+
+int
+db_delete(DB *db,const char *key)
+{
+	int rc;
+	if(_db_find(db,key,1)==0)
+	{
+		rc = _db_dodelete(db);
+		db->cnt_delok++;
+	}else{
+		rc = -1;
+		db->cnt_delerr++;
+	}
+	if(un_lock(db->idxfd,db->chainoff,SEEK_SET,1)<0)
+		perror("un_lock error");
+	return rc;
+}
+
+int 
+_db_dodelete(DB *db)
+{
+	int     i;
+	char	*ptr;
+	off_t   freeptr,saveptr;
+	
+	for(ptr = db->datbuf,i=0;i<db->datlen-1;i++)
+		*ptr++ = ' ';
+	*ptr = 0;
+	ptr = db->idxbuf;
+	while(*ptr)
+		*ptr++ = ' ';
+	if(writew_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+		perror("writew_lock error");
+
+	_db_writedat(db,db->datbuf,db->datoff,SEEK_SET);
+
+	freeptr = _db_readptr(db,FREE_OFF);
+	saveptr = db->ptrval;
+	
+	_db_writeidx(db,db->idxbuf,db->idxoff,SEEK_SET,freeptr);
+	_db_writeptr(db,FREE_OFF,db->idxoff);//空闲链表指针
+
+	_db_writeptr(db,db->ptroff,saveptr);//被删除索引记录指针
+
+	if(un_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+		perror("un_lock error");	
+
+	return 0;
+}
+
+void
+_db_writedat(DB *db,const char *data,off_t offset,int whence)
+{
+	struct iovec iov[2];
+	char   newline = '\n';
+	
+	if(whence == SEEK_END)
+    	if(writew_lock(db->datfd,0,SEEK_SET,0)<0)//加了写琐
+			perror("writew_lock error");
+
+	if((db->datoff = lseek(db->datfd,offset,whence)) == -1)
+		perror("lseek error");
+	db->datlen = strlen(data) + 1;
+
+	iov[0].iov_base = (char*) data;
+	iov[0].iov_len  = db->datlen - 1;
+	iov[1].iov_base = &newline;
+	iov[1].iov_len  = 1;
+	
+	writev(db->datfd,iov,2);
+
+	if(whence == SEEK_END)
+		if(un_lock(db->datfd,0,SEEK_SET,0)<0)	
+			perror("un_lock errror");
+}
+
+void
+_db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
+{
+	struct iovec iov[2];
+	char         asciiptrlen[PTR_SZ + IDXLEN_SZ +1];
+	int          len;
+	
+	if((db->ptrval = ptrval)<0 || ptrval>PTR_MAX)
+	{
+		perror("invalid ptr");
+		exit(1);
+	}
+	sprintf(db->idxbuf,"%s%c%d%c%d\n",key,SEP,db->datoff,SEP,db->datlen);
+
+	if((len=strlen(idxbuf))<IDXLEN_MIN||len>IDXLEN_MAX)
+	{
+		perror("invalid length");
+		abort();
+		exit(1);
+	}
+	sprintf(asciiptrlen,"%*d%*d",PTR_SZ,ptrval,IDXLEN_SZ,len);
+	
+	if(whence == SEEK_END)
+	{
+		if(writew_lock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)
+		{
+			perror("writew_lock error");
+			abort();
+			exit(1);
+		}
+	}
+	if((db->idxoff = lseek(db->idxfd,offset,whence)) == -1)
+	{		
+		perror("lseek error");
+		abort();
+		exit(1);
+	}
+	
+	iov[0].iov_base = asciiptrlen;
+	iov[0].iov_len  = PTR_SZ + IDXLEN_SZ;
+	iov[1].iov_base = db->idxbuf;
+	iov[1].lov_len  = len;
+	
+	if(writev(db->idxfd,iov,2) != PTR_SZ+IDXLEN_SZ+len)
+	{
+		perror("writev error");
+		abort();
+		exit(1);
+	}
+	if(whence == SEEK_END)
+	{
+		if(unlock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)
+		{
+			perror("un_lock error");
+			abort();
+			exit(1);			
+		}
+	}
+}
+
+void 
+_db_writeptr(DB *db,off_t offset,off_t ptrval)
+{
+	char asciiptr[PTR_SZ + 1];
+	if(ptrval<0||ptrval>PTR_MAX)
+	{		
+		perror("invalid ptrval");
+		exit(1);
+	}
+	sprintf(asciiptr,"%*d",PTR_SZ,ptrval);//加*表示以PTR——SZ为空出单位，右对齐
+	
+	if(lseek(db->idxfd,offset,SEEK_SET)==-1)
+	{		
+		perror("lseek error to ptr field");
+		abort();
+		exit(1);			
+	}
+	if(write(db->idxfd,asciiptr,PTR_SZ)!=PTR_SZ)
+	{
+		perror("write error of ptr filed");
+		abort();
+		exit(1);	
+	}
+}
+
+int 
+db_store(DB *db,const char *key,const char *data,int flag)
+{
+	int rc,keylen,datlen;
+	off_t ptrval;
+	
+	keylen = strlen(key);
+	datlen = strlen(data)+1;
+	if(datlen < DATLEN_MIN||datlen>DATLEN_MAX)
+	{		
+		perror("invalid data length");
+		abort();
+		exit(1);	
+	}
+	if(_db_find(db,key,1)<0)
+	{
+		if(flag & DB_REPLACE)
+		{
+			rc = -1;
+			db->cnt_storerr++;
+			goto doreturn;
+		}
+	
+		ptrval = _db_readptr(db,db->chainoff);
+		if(_db_findfree(db,keylen,datlen)<0)
+		{
+			_db_writedat(db,data,0,SEEK_SET);
+			_db_writeidx(db,key,0,SEEK_SET,ptrval);
+			_db_writeptr(db,db->chainoff,db->idxoff);
+			db->cnt_store1++;
+		}else{
+			_db_writedat(db,data,db->datoff,SEEK_SET);
+			_db_writeidx(db,key,db->idxoff,SEEK_SET,ptrval);
+			_db_writeptr(db,db->chainoff,db->idxoff);
+			db->cnt_store2++;			
+		}
+	}else{
+		if(flag & DB_INSERT)
+		{
+			rc=1;
+			db->cnt_storerr++;
+			goto doreturn;
+		}
+		if(datlen !=db->datlen)
+		{
+			_db_dodelete(db);
+			ptrval = _db_readptr(db,db->chainoff);
+			_db_writedat(db,data,0,SEEK_END);
+			_db_writeidx(db,key,0,SEEK_END,ptrval);
+			_db_writeptr(db,db->chainoff,db->idxoff);
+			db->cnt_store3++;
+		}else{
+			_db_writedat(db,data,db->datoff,SEEK_SET);
+			db->cnt_store4++;
+		}
+	}
+	rc=0;
+doreturn:
+	if(un_lock(db->idxfd,db->chainoff,SEEK_SET,1)<0)
+	{		
+		perror("un_lock error");
+		abort();
+		exit(1);	
+	}
+	return rc;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
