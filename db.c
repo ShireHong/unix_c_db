@@ -417,8 +417,8 @@ db_store(DB *db,const char *key,const char *data,int flag)
 		ptrval = _db_readptr(db,db->chainoff);
 		if(_db_findfree(db,keylen,datlen)<0)
 		{
-			_db_writedat(db,data,0,SEEK_SET);
-			_db_writeidx(db,key,0,SEEK_SET,ptrval);
+			_db_writedat(db,data,0,SEEK_END);
+			_db_writeidx(db,key,0,SEEK_END,ptrval);
 			_db_writeptr(db,db->chainoff,db->idxoff);
 			db->cnt_store1++;
 		}else{
@@ -458,7 +458,45 @@ doreturn:
 	return rc;
 }
 
-
+int 
+_db_findfree(DB db,int keylen,int datlen)
+{
+	int  rc;
+	off_t  offset,nextoffset,saveoffset;
+	
+	if(writew_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+	{		
+		perror("writew_lock error");
+		abort();
+		exit(1);	
+	}
+	saveoffset=FREE_OFF;
+	offset=_db_readptr(db,saveoffset);
+	
+	while(offset!=0)
+	{
+		nextoffset =_db_readidx(db,offset);
+		if(strlen(db->idxbuf) == keylen && db->datlen==datlen)
+			break;
+		saveoffset=offset;
+		offset=nextoffset;
+	}
+	if(offset == 0)
+		rc = -1;//找不到匹配
+	else
+	{
+		_db_writeptr(db,saveoffset,db->ptrval);
+		rc = 0;
+	}
+	if(un_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+	{
+		
+		perror("un_lock error");
+		abort();
+		exit(1);	
+	}
+	return rc;
+}
 
 
 
