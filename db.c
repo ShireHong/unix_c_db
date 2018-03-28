@@ -4,8 +4,17 @@
 #include<string.h>
 #include<sys/uio.h>
 
-#define writew_lock(fd, offset, whence, len) lock_reg(fd,F_SETLKW,F_WRLCK,of    fset,whence,len)
-#define un_lock(fd,offset,whence,len)    lock_reg(fd,F_SETLK,F_UNLCK,offset,    whence,len)
+#define  read_lock(fd,offset,whence,len) \
+			lock_reg(fd,F_SETLK,F_RDLCK,offset,whence,len)
+#define  readw_lock(fd,offset,whence,len)\
+			lock_reg(fd,F_SETLKW,F_RDLCK,offset,whence,len)
+
+#define  write_lock(fd,offset,whence,len)\
+			lock_reg(fd,F_SETLK,F_WRLCK,offset,whence,len)
+#define  writew_lock(fd, offset, whence, len) \
+			lock_reg(fd,F_SETLKW,F_WRLCK,offset,whence,len)
+#define  un_lock(fd,offset,whence,len)   \
+			lock_reg(fd,F_SETLK,F_UNLCK,offset,whence,len)
 
 
 DB* 
@@ -330,7 +339,7 @@ _db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
 	
 	if(whence == SEEK_END)
 	{
-		if(writew_lock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)
+		if(writew_lock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)//
 		{
 			perror("writew_lock error");
 			abort();
@@ -415,7 +424,7 @@ db_store(DB *db,const char *key,const char *data,int flag)
 		}
 	
 		ptrval = _db_readptr(db,db->chainoff);
-		if(_db_findfree(db,keylen,datlen)<0)
+		if(_db_findfree(db,keylen,datlen)<0)// 查看记录长度
 		{
 			_db_writedat(db,data,0,SEEK_END);
 			_db_writeidx(db,key,0,SEEK_END,ptrval);
@@ -498,32 +507,55 @@ _db_findfree(DB db,int keylen,int datlen)
 	return rc;
 }
 
+void 
+db_rewind(DB *db)
+{
+	off_t offset;
+	offset=(db->nhash + 1)*PTR_SZ;
+	
+	if((db->idxoff = lseek(db->idxfd,offset+1,SEEK_SET))==-1)
+	{		
+		perror("un_lock error");
+		abort();
+		exit(1);	
+	}	
 
+}
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+char *
+db_nextrec(DB *db,char *key)
+{
+	char c,*ptr;
+	
+	if(readw_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+	{		
+		perror("readw_lock error");
+		abort();
+		exit(1);	
+	}
+	do{
+		if(_db_readidx(db,0)<0)
+		{
+			ptr=NULL;
+			goto doreturn;
+		}
+		ptr=db->idxbuf;
+		while((c=*ptr++) !=0 && c==' ');
+	}while(c==0);
+	
+	if(key !=NULL)
+		strcpy(key,db->idxbuf);
+	ptr = _db_readdat(db);
+	db->cnt_nextrec++;
+doreturn:
+	if(un_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
+	{
+		perror("un_lock error");
+		abort();
+		exit(1);	
+		
+	}
+	return ptr;
+}
 
 

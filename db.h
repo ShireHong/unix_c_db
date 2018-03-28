@@ -54,7 +54,7 @@ typedef unsigned long hash_t;
 
 DB*  db_open(const char *,int,int);
 DB*	 _db_alloc(int);
-
+DB*  _
 
 
 
