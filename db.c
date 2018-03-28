@@ -105,15 +105,15 @@ db_close(DB *db)
 
 
 char *
-db_fetch(DB*db,const char*key)
+db_fetch(DB*db,const char*key)//取出
 {
 	char *ptr;
-	if(_db_find(db,key,0)<0)
+	if(_db_find(db,key,0)<0)//没找到key值对应
 	{
 		ptr=NULL;
 		db->cnt_fetcherr++;
 	}else{
-		ptr=_db_readdat(db);
+		ptr=_db_readdat(db);//读出key值所对应的数据值
 		db->cnt_fetchok++;
 	}
 	if(un_lock(db_idxfd,db->chainoff,SEEK_SET,1)<0)
