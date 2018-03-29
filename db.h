@@ -52,12 +52,31 @@ typedef struct {
 
 typedef unsigned long hash_t;
 
-DB*  db_open(const char *,int,int);
-DB*	 _db_alloc(int);
-char*  _db_fetch(DB *,const char *);
-_db_find(DB *,const char *,int);
-_db_hash(DB *,const char *);
+DB*     db_open(const char *,int,int);
+DB*	   _db_alloc(int);
+void   _db_rewind(DB*);
+char*   db_fetch(DB *,const char *);
+int    _db_find(DB *,const char *,int);
+hash_t _db_hash(DB *,const char *);
+off_t  _db_readptr(DB *,off_t );
+off_t  _db_readidx(DB *,off_t );
+char*  _db_readdat(DB*);
+int     db_delete(DB *,const char *);
+int    _db_dodelete(DB *);
+void   _db_writedat(DB *,const char *,off_t, int );
+void   _db_writeidx(DB *,const char *,off_t, int,off_t);
+void   _db_writeptr(DB *, off_t, off_t);
 
 
 
 #endif 	
+
+
+
+
+
+
+
+
+
+

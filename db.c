@@ -4,6 +4,35 @@
 #include<string.h>
 #include<sys/uio.h>
 
+/* 
+ *  the data concludes two file:idx file and data file 
+ *  idx file concludes hash table,index record
+ */
+
+/*  
+    |       hash table              |      index record                  |
+    |_______________________________|____________________________________|
+	|		|		 |			|	|							         |		
+	|freeoff|chainoff|   .....	|\n	|								     |       index file.idx
+	|_______|________|__________|___|____________________________________|
+                |                  /                                     \
+first hash   ___|                 /  |  composition of a piece of idx  |  \
+value offset                     /___|_________________________________|___\
+                                |    |chain|idx|     |   |data|   |data|    |        
+                                |... |ptr  |len| key |sep|off |seq|len |... |        
+                                |____|_____|___|_____|___|____|___|____|____|
+                                         |                 |
+       next offset of idx record      /__|     ____________| 
+       on hash table                  \        |     
+                                               |  data     |
+                                         _____\|__record___|____________
+                                        |      |           |   |        |
+                                        |      |  datbuf   |\n |        |       data file.dat
+                                        |______|___________|___|________|
+                                               |               |  
+                                               |  datalen      |
+*/
+
 #define  read_lock(fd,offset,whence,len) \
 			lock_reg(fd,F_SETLK,F_RDLCK,offset,whence,len)
 #define  readw_lock(fd,offset,whence,len)\
@@ -22,7 +51,7 @@ db_open(const char *name,int oflag,int mode)
 {
 	DB*  db;
 	int  i,len;
-	char asciiptr[PTR_SZ + 1],hash[(NHASH_DEF + 1)*PTR_SZ + 2];
+	char asciiptr[PTR_SZ + 1],hash[(NHASH_DEF + 1)*PTR_SZ + 2];//创建hash表
 	
 	struct stat statbuf;
 	len = strlen(pathname);
@@ -117,7 +146,11 @@ db_fetch(DB*db,const char*key)//取出
 		db->cnt_fetchok++;
 	}
 	if(un_lock(db_idxfd,db->chainoff,SEEK_SET,1)<0)
+	{		
 		perror("un_lock error");
+		abort();
+		exit(1);
+	}
 	return ptr;
 }
 
@@ -126,7 +159,7 @@ _db_find(DB* db,const char *key,int writelock)
 {
 	off_t offset,nextoffset;
 	
-	db->chainoff = (_db_hash(db,key)*PTR_SZ)+db->hashoff;
+	db->chainoff = (_db_hash(db,key)*PTR_SZ)+db->hashoff;//hash表上的偏移
 	db->ptroff = db->chainoff;
 	
 	if(writelock)
@@ -137,21 +170,19 @@ _db_find(DB* db,const char *key,int writelock)
 		if(readw_lock(db->idxfd,db->chainoff,SEEK_SET,1)<0)	
 			perror("readw_lock");
 	}
-	offset = _db_readptr(db,db->ptroff);
+	offset = _db_readptr(db,db->ptroff);//如上图所知，读出的是地址是在下一个索引的hash表处
 	while(offset!=0)
 	{
-		nextoffset=_db_readidx(db,offset);
+		nextoffset=_db_readidx(db,offset);//将此key的数据读出来，放到db->idxbuf中
 		if(strcmp(db->idxbuf,key)==0)
 			break;
-		db->ptroff = offset;
+		db->ptroff = offset;//当前偏移记录
 		offset = nextoffset;
 	}
 	if(offset==0)
 		return -1;
 	return 0;
 }
-
-
 
 hast_t 
 _db_hash(DB *db,const char *key)
@@ -166,7 +197,6 @@ _db_hash(DB *db,const char *key)
 	return(hval % db->nhash)
 }
 
-
 off_t  
 _db_readptr(DB* db, off_t offset)//偏移？
 {
@@ -177,7 +207,6 @@ _db_readptr(DB* db, off_t offset)//偏移？
 	asciiptr[PTR_SZ] = 0;
 	return(atol(asciiptr));
 }
-
 
 off_t 
 _db_readidx(DB *db,off_t offset)//读索引
@@ -191,7 +220,7 @@ _db_readidx(DB *db,off_t offset)//读索引
 	iov[0].iov_base = asciiptr;
 	iov[0].iov_len  = PTR_SZ;
 	iov[1].iov_base = asciilen;
-	iov[1].iov_len  = IDXLEN_SZ;	
+	iov[1].iov_len  = IDXLEN_SZ;//最大能存储4位数长度	
 	
 	if((i=readv(db-idxfd,iov,2)) != PTR_SZ + IDXLEN_SZ)//输入字符和字符长度
 	{
@@ -200,14 +229,14 @@ _db_readidx(DB *db,off_t offset)//读索引
 	}
 
 	asciiptr[PTR_SZ]=0;
-	db->ptrval = atol(asciiptr);//偏移
+	db->ptrval = atol(asciiptr);//散列表上下一个索引偏移地址
 
 	if((db->idxlen = atoi(asciilen))<IDXLEN_MIN||db->idxlen>IDXLEN_MAX)//将字符转换为整数
 		perror("invalid length");
 	read(db->idxfd,db->idxbuf,db->idxlen);
 	if(db->idxbuf[db->idxlen-1] != '\n')
 		perror("missing newline");
-	db->idxbuf[db->idxlen-1] = =0;
+	db->idxbuf[db->idxlen-1] = 0;
 	
 	ptr1=strchr(db->idxbuf,SEP);//ptr1指向第一次出现：的字符串
 	*ptr++=0;
@@ -275,13 +304,13 @@ _db_dodelete(DB *db)
 
 	_db_writedat(db,db->datbuf,db->datoff,SEEK_SET);
 
-	freeptr = _db_readptr(db,FREE_OFF);
-	saveptr = db->ptrval;
+	freeptr = _db_readptr(db,FREE_OFF);//回到文件起点
+	saveptr = db->ptrval;//散列表存储的下一个偏移地址
 	
-	_db_writeidx(db,db->idxbuf,db->idxoff,SEEK_SET,freeptr);
-	_db_writeptr(db,FREE_OFF,db->idxoff);//空闲链表指针
+	_db_writeidx(db,db->idxbuf,db->idxoff,SEEK_SET,freeptr);//清空索引记录的下一条索引记录
+	_db_writeptr(db,FREE_OFF,db->idxoff);//更新freeptr值
 
-	_db_writeptr(db,db->ptroff,saveptr);//被删除索引记录指针
+	_db_writeptr(db,db->ptroff,saveptr);//更新散列表下一个记录存储的值
 
 	if(un_lock(db->idxfd,FREE_OFF,SEEK_SET,1)<0)
 		perror("un_lock error");	
@@ -513,7 +542,7 @@ db_rewind(DB *db)
 	off_t offset;
 	offset=(db->nhash + 1)*PTR_SZ;
 	
-	if((db->idxoff = lseek(db->idxfd,offset+1,SEEK_SET))==-1)
+	if((db->idxoff = lseek(db->idxfd,offset+1,SEEK_SET))==-1)//索引记录起点位置，散列表结束处
 	{		
 		perror("un_lock error");
 		abort();
