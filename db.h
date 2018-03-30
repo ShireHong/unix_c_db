@@ -66,8 +66,12 @@ int    _db_dodelete(DB *);
 void   _db_writedat(DB *,const char *,off_t, int );
 void   _db_writeidx(DB *,const char *,off_t, int,off_t);
 void   _db_writeptr(DB *, off_t, off_t);
-
-
+int     db_store(DB *, const char *, const char *, int);
+int    _db_findfree(DB *,int, int );
+void    db_rewind(DB *);
+char*   db_nextrec(DB *,char *);
+int    _db_free(DB *);
+void   db_close(DB *);
 
 #endif 	
 

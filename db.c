@@ -3,7 +3,8 @@
 #include"lock_reg.h"
 #include<string.h>
 #include<sys/uio.h>
-
+#include<stdlib.h>
+#include<unistd.h>
 /* 
  *  the data concludes two file:idx file and data file 
  *  idx file concludes hash table,index record
@@ -54,12 +55,12 @@ db_open(const char *name,int oflag,int mode)
 	char asciiptr[PTR_SZ + 1],hash[(NHASH_DEF + 1)*PTR_SZ + 2];//创建hash表
 	
 	struct stat statbuf;
-	len = strlen(pathname);
+	len = strlen(name);
 	if((db = _db_alloc(len))==NULL)
 		perror("_db_alloc error");
 	db->oflag = oflag;
 	
-	strcpy(db->name,pathname);
+	strcpy(db->name,name);
 	strcat(db->name,".idx");
 	
 	db->idxfd=open(db->name,oflag,mode);
@@ -90,13 +91,13 @@ db_open(const char *name,int oflag,int mode)
 	return(db);
 } 
 
-static DB*
+DB*
  _db_alloc(int namelen)
 {
 	DB *db;
 	
 	if((db=calloc(1,sizeof(DB)))==NULL)
-		prror("alloc error");
+		perror("alloc error");
 	db->idxfd = db->datfd = -1;
 	
 	db->name=malloc(namelen+5);
@@ -145,7 +146,7 @@ db_fetch(DB*db,const char*key)//取出
 		ptr=_db_readdat(db);//读出key值所对应的数据值
 		db->cnt_fetchok++;
 	}
-	if(un_lock(db_idxfd,db->chainoff,SEEK_SET,1)<0)
+	if(un_lock(db->idxfd,db->chainoff,SEEK_SET,1)<0)
 	{		
 		perror("un_lock error");
 		abort();
@@ -184,17 +185,17 @@ _db_find(DB* db,const char *key,int writelock)
 	return 0;
 }
 
-hast_t 
+hash_t 
 _db_hash(DB *db,const char *key)
 {
-	hast_t hval;
+	hash_t hval;
 	const char *ptr;
 	char c;
 	int i;
 	hval=0;
 	for(ptr=key,i=1;c=*ptr++;i++)//只要ptr加到末尾c=0,则中间的条件就不满足,跳出循环，此方法巧妙	
 		hval +=c*i;
-	return(hval % db->nhash)
+	return(hval % db->nhash);
 }
 
 off_t  
@@ -213,7 +214,7 @@ _db_readidx(DB *db,off_t offset)//读索引
 {
 	int 	i;
 	char 	*ptr1,*ptr2;
-	char 	asciiptr[PTR_ZE+1],asciilen[IDXLEN_SZ+1];
+	char 	asciiptr[PTR_SZ+1],asciilen[IDXLEN_SZ+1];
 	struct iovec iov[2];
 	if((db->idxoff = lseek(db->idxfd,offset,offset == 0 ? SEEK_CUR:SEEK_SET))==-1)
 			perror("lseek error");
@@ -222,7 +223,7 @@ _db_readidx(DB *db,off_t offset)//读索引
 	iov[1].iov_base = asciilen;
 	iov[1].iov_len  = IDXLEN_SZ;//最大能存储4位数长度	
 	
-	if((i=readv(db-idxfd,iov,2)) != PTR_SZ + IDXLEN_SZ)//输入字符和字符长度
+	if((i=readv(db->idxfd,iov,2)) != PTR_SZ + IDXLEN_SZ)//输入字符和字符长度
 	{
 		if(i==0 && offset == 0)
 			return -1;//eof
@@ -239,7 +240,7 @@ _db_readidx(DB *db,off_t offset)//读索引
 	db->idxbuf[db->idxlen-1] = 0;
 	
 	ptr1=strchr(db->idxbuf,SEP);//ptr1指向第一次出现：的字符串
-	*ptr++=0;
+	*ptr1++=0;
 	
 	ptr2=strchr(ptr1,SEP);//ptr2指向第二次的：
 	*ptr2++=0;
@@ -345,7 +346,7 @@ _db_writedat(DB *db,const char *data,off_t offset,int whence)
 }
 
 void
-_db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
+_db_writeidx(DB *db, const char *key, off_t offset, int whence, off_t ptrval)
 {
 	struct iovec iov[2];
 	char         asciiptrlen[PTR_SZ + IDXLEN_SZ +1];
@@ -358,7 +359,7 @@ _db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
 	}
 	sprintf(db->idxbuf,"%s%c%d%c%d\n",key,SEP,db->datoff,SEP,db->datlen);
 
-	if((len=strlen(idxbuf))<IDXLEN_MIN||len>IDXLEN_MAX)
+	if((len=strlen(db->idxbuf))<IDXLEN_MIN||len>IDXLEN_MAX)
 	{
 		perror("invalid length");
 		abort();
@@ -385,7 +386,7 @@ _db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
 	iov[0].iov_base = asciiptrlen;
 	iov[0].iov_len  = PTR_SZ + IDXLEN_SZ;
 	iov[1].iov_base = db->idxbuf;
-	iov[1].lov_len  = len;
+	iov[1].iov_len  = len;
 	
 	if(writev(db->idxfd,iov,2) != PTR_SZ+IDXLEN_SZ+len)
 	{
@@ -395,7 +396,7 @@ _db_writeidx(DB *db,const char *key,off_t offset.int whence,off_t ptrval)
 	}
 	if(whence == SEEK_END)
 	{
-		if(unlock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)
+		if(un_lock(db->idxfd,((db->nhash+1)*PTR_SZ)+1,SEEK_SET,0)<0)
 		{
 			perror("un_lock error");
 			abort();
@@ -436,14 +437,14 @@ db_store(DB *db,const char *key,const char *data,int flag)
 	off_t ptrval;
 	
 	keylen = strlen(key);
-	datlen = strlen(data)+1;
+	datlen = strlen(data)+1;//1字节为换行符
 	if(datlen < DATLEN_MIN||datlen>DATLEN_MAX)
 	{		
 		perror("invalid data length");
 		abort();
 		exit(1);	
 	}
-	if(_db_find(db,key,1)<0)
+	if(_db_find(db,key,1)<0)//未找到
 	{
 		if(flag & DB_REPLACE)
 		{
@@ -452,28 +453,44 @@ db_store(DB *db,const char *key,const char *data,int flag)
 			goto doreturn;
 		}
 	
-		ptrval = _db_readptr(db,db->chainoff);
-		if(_db_findfree(db,keylen,datlen)<0)// 查看记录长度
+		ptrval = _db_readptr(db,db->chainoff);//回到空闲链表上去找
+
+		if(_db_findfree(db,keylen,datlen)<0)
 		{
+		/*
+			key值大小和数据大小不相等的情况下，重新加入相关内容
+        */
 			_db_writedat(db,data,0,SEEK_END);
 			_db_writeidx(db,key,0,SEEK_END,ptrval);
 			_db_writeptr(db,db->chainoff,db->idxoff);
 			db->cnt_store1++;
 		}else{
+		/*
+			将数据根据偏移地址处添加，key值大小和数据大小相等的情况下。
+		*/
 			_db_writedat(db,data,db->datoff,SEEK_SET);
 			_db_writeidx(db,key,db->idxoff,SEEK_SET,ptrval);
 			_db_writeptr(db,db->chainoff,db->idxoff);
 			db->cnt_store2++;			
 		}
 	}else{
+		/*
+			key值有记录的情况下
+		*/
 		if(flag & DB_INSERT)
 		{
+		/*
+			已有记录，无法插入
+		*/
 			rc=1;
 			db->cnt_storerr++;
 			goto doreturn;
 		}
 		if(datlen !=db->datlen)
 		{
+		/*
+			数据长度不相等，先删除
+		*/
 			_db_dodelete(db);
 			ptrval = _db_readptr(db,db->chainoff);
 			_db_writedat(db,data,0,SEEK_END);
@@ -497,7 +514,7 @@ doreturn:
 }
 
 int 
-_db_findfree(DB db,int keylen,int datlen)
+_db_findfree(DB *db,int keylen,int datlen)
 {
 	int  rc;
 	off_t  offset,nextoffset,saveoffset;
@@ -508,8 +525,8 @@ _db_findfree(DB db,int keylen,int datlen)
 		abort();
 		exit(1);	
 	}
-	saveoffset=FREE_OFF;
-	offset=_db_readptr(db,saveoffset);
+	saveoffset=FREE_OFF;//位置指向空闲链表
+	offset=_db_readptr(db,saveoffset);//读出空闲链表中第一条偏移地址
 	
 	while(offset!=0)
 	{
@@ -565,6 +582,9 @@ db_nextrec(DB *db,char *key)
 	do{
 		if(_db_readidx(db,0)<0)
 		{
+		/*
+			重头开始查找
+		*/
 			ptr=NULL;
 			goto doreturn;
 		}
